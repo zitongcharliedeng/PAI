@@ -150,12 +150,26 @@ fi
 
 print_header "Step 1: Checking Prerequisites"
 
-print_step "Checking for macOS..."
+print_step "Checking operating system..."
+IS_MACOS=false
+IS_LINUX=false
+IS_WSL=false
+
 if [[ "$OSTYPE" == "darwin"* ]]; then
     macos_version=$(sw_vers -productVersion)
     print_success "Running macOS $macos_version"
+    IS_MACOS=true
+elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    IS_LINUX=true
+    # Check for WSL
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        IS_WSL=true
+        print_success "Running Linux (WSL)"
+    else
+        print_success "Running Linux"
+    fi
 else
-    print_warning "This script is designed for macOS. You're running: $OSTYPE"
+    print_warning "Unsupported OS: $OSTYPE"
     if ! ask_yes_no "Continue anyway? (Some features may not work)"; then
         exit 1
     fi
@@ -172,12 +186,18 @@ else
 fi
 
 print_step "Checking for Homebrew..."
-if command_exists brew; then
-    brew_version=$(brew --version | head -n1 | awk '{print $2}')
-    print_success "Homebrew $brew_version is installed"
-    HAS_BREW=true
+if [ "$IS_MACOS" = true ]; then
+    if command_exists brew; then
+        brew_version=$(brew --version | head -n1 | awk '{print $2}')
+        print_success "Homebrew $brew_version is installed"
+        HAS_BREW=true
+    else
+        print_warning "Homebrew is not installed"
+        HAS_BREW=false
+    fi
 else
-    print_warning "Homebrew is not installed"
+    # Homebrew not required on Linux - we use native package managers
+    print_info "Homebrew check skipped (not required on Linux)"
     HAS_BREW=false
 fi
 
@@ -197,15 +217,22 @@ fi
 
 NEEDS_INSTALL=false
 
-if [ "$HAS_GIT" = false ] || [ "$HAS_BREW" = false ] || [ "$HAS_BUN" = false ]; then
-    NEEDS_INSTALL=true
+# On macOS, we need Homebrew. On Linux, we don't.
+if [ "$IS_MACOS" = true ]; then
+    if [ "$HAS_GIT" = false ] || [ "$HAS_BREW" = false ] || [ "$HAS_BUN" = false ]; then
+        NEEDS_INSTALL=true
+    fi
+else
+    if [ "$HAS_GIT" = false ] || [ "$HAS_BUN" = false ]; then
+        NEEDS_INSTALL=true
+    fi
 fi
 
 if [ "$NEEDS_INSTALL" = true ]; then
     print_header "Step 2: Installing Missing Software"
 
-    # Install Homebrew if needed
-    if [ "$HAS_BREW" = false ]; then
+    # Install Homebrew if needed (macOS only)
+    if [ "$IS_MACOS" = true ] && [ "$HAS_BREW" = false ]; then
         echo ""
         print_warning "Homebrew is not installed. Homebrew is a package manager for macOS."
         print_info "We need it to install other tools like Bun."
@@ -236,10 +263,23 @@ if [ "$NEEDS_INSTALL" = true ]; then
 
         if ask_yes_no "Install Git?"; then
             print_step "Installing Git..."
-            if [ "$HAS_BREW" = true ]; then
-                brew install git
-            else
-                xcode-select --install
+            if [ "$IS_MACOS" = true ]; then
+                if [ "$HAS_BREW" = true ]; then
+                    brew install git
+                else
+                    xcode-select --install
+                fi
+            elif [ "$IS_LINUX" = true ]; then
+                if command_exists apt-get; then
+                    sudo apt-get update && sudo apt-get install -y git
+                elif command_exists dnf; then
+                    sudo dnf install -y git
+                elif command_exists pacman; then
+                    sudo pacman -S --noconfirm git
+                else
+                    print_error "Could not detect package manager. Please install git manually."
+                    exit 1
+                fi
             fi
             print_success "Git installed successfully!"
             HAS_GIT=true
@@ -253,16 +293,31 @@ if [ "$NEEDS_INSTALL" = true ]; then
     if [ "$HAS_BUN" = false ]; then
         echo ""
         print_warning "Bun is not installed. Bun is a fast JavaScript runtime."
-        print_info "It's needed for PAI's voice server and other features."
+        print_info "It's needed for PAI's hooks and voice server."
         echo ""
 
         if ask_yes_no "Install Bun?"; then
             print_step "Installing Bun..."
-            brew install oven-sh/bun/bun
+            if [ "$IS_MACOS" = true ] && [ "$HAS_BREW" = true ]; then
+                brew install oven-sh/bun/bun
+            else
+                # Use official curl installer (works on macOS and Linux)
+                curl -fsSL https://bun.sh/install | bash
+                # Add bun to PATH for this session
+                export BUN_INSTALL="$HOME/.bun"
+                export PATH="$BUN_INSTALL/bin:$PATH"
+            fi
             print_success "Bun installed successfully!"
             HAS_BUN=true
+
+            # Note for WSL users about PATH
+            if [ "$IS_WSL" = true ]; then
+                print_info "WSL Note: Add this to your ~/.bashrc for hooks to work:"
+                echo '  export PATH="$HOME/.bun/bin:$PATH"'
+            fi
         else
             print_warning "Bun is optional, but recommended. Continuing without it."
+            print_warning "Note: Hooks will not work without Bun."
         fi
     fi
 else
