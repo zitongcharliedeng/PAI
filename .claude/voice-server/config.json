@@ -1,0 +1,14 @@
+{
+  "$schema": "./config-schema.json",
+  "_comment": "Voice server configuration - backends are tried in order until one is available",
+
+  "backends": ["piper", "elevenlabs", "macos-say"],
+
+  "defaultVoice": "aito",
+
+  "server": {
+    "port": 8888,
+    "rateLimit": 10,
+    "rateLimitWindow": 60000
+  }
+}
